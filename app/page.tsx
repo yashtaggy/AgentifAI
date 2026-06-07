@@ -555,8 +555,7 @@ export default function Home() {
                 <header className="flex-none p-6 border-b border-border bg-background z-10 flex items-center justify-between">
                     <div className="flex items-center space-x-4">
                         <div className="flex items-center space-x-2">
-                            <Bot className="w-6 h-6 text-primary" />
-                            <h1 className="font-bold text-lg">Agentic API Copilot</h1>
+                            <img src="/Orion.png" alt="Orion" className="h-[36px] w-auto object-contain" />
                         </div>
                         <div className="ml-4 flex bg-secondary rounded-lg p-1 border border-border">
                             <button

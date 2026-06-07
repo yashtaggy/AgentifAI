@@ -6,8 +6,13 @@ import { cn } from '@/lib/utils'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-    title: 'Agentic API Copilot',
-    description: 'AI-powered assistance for your OpenAPI endpoints',
+    title: 'Orion - API Intelligence Layer',
+    description: 'Parse, explore, test, audit and generate SDKs from any API instantly',
+    icons: {
+        icon: '/Orion.png',
+        shortcut: '/Orion.png',
+        apple: '/Orion.png',
+    }
 }
 
 export default function RootLayout({
@@ -17,6 +22,9 @@ export default function RootLayout({
 }) {
     return (
         <html lang="en">
+            <head>
+                <link rel="icon" href="/Orion.png" />
+            </head>
             <body className={cn(inter.className, "min-h-screen bg-background text-foreground antialiased selection:bg-primary selection:text-primary-foreground")}>
                 {children}
             </body>
