@@ -2,14 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import { parseOpenApiUrl } from "@/services/openapi";
-import { fetchAndParseSpec } from "@/app/actions/openapi";
+import { fetchAndParseSpec, fetchRawSpecJSON } from "@/app/actions/openapi";
 import { ApiSpec, ApiEndpoint, ChatMessage } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Bot, Link, Send, Code, Play, AlertCircle, ChevronRight, Check, Search, Shield, Copy, Sun, Moon } from "lucide-react";
+import { Bot, Link, Send, Code, Play, AlertCircle, ChevronRight, Check, Search, Shield, Copy, Sun, Moon, X, Download } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
 const MessageContent = ({ content, theme }: { content: string, theme: "dark" | "light" }) => {
@@ -87,6 +87,38 @@ export default function Home() {
     const [testResponse, setTestResponse] = useState<any>(null);
     const [testLoading, setTestLoading] = useState(false);
 
+    // Error Detective Mode
+    const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+    const [diagnosisResult, setDiagnosisResult] = useState<any>(null);
+
+    // Intent Mode
+    const [mode, setMode] = useState<"explorer" | "intent" | "diff" | "audit">("explorer");
+    const [intentGoal, setIntentGoal] = useState("");
+    const [intentLoading, setIntentLoading] = useState(false);
+    const [intentResult, setIntentResult] = useState<any>(null);
+    const [intentError, setIntentError] = useState<string | null>(null);
+    const [activeCodeTab, setActiveCodeTab] = useState<"python" | "js" | "curl">("python");
+
+    // Diff Mode
+    const [diffUrlA, setDiffUrlA] = useState("");
+    const [diffUrlB, setDiffUrlB] = useState("");
+    const [diffLoading, setDiffLoading] = useState(false);
+    const [diffResult, setDiffResult] = useState<any>(null);
+    const [diffError, setDiffError] = useState<string | null>(null);
+
+    // Audit Mode
+    const [auditUrl, setAuditUrl] = useState("");
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditResult, setAuditResult] = useState<any>(null);
+    const [auditError, setAuditError] = useState<string | null>(null);
+
+    // SDK Generator Mode
+    const [sdkModalOpen, setSdkModalOpen] = useState(false);
+    const [sdkLang, setSdkLang] = useState<"python" | "typescript">("python");
+    const [sdkLoading, setSdkLoading] = useState(false);
+    const [sdkResult, setSdkResult] = useState<any>(null);
+    const [sdkError, setSdkError] = useState<string | null>(null);
+
     useEffect(() => {
         if (theme === "dark") {
             document.documentElement.classList.add("dark");
@@ -111,6 +143,26 @@ export default function Home() {
             setError(err.message || "Failed to parse API");
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleGenerateIntent = async () => {
+        if (!intentGoal.trim()) return;
+        setIntentLoading(true);
+        setIntentError(null);
+        try {
+            const res = await fetch("/api/intent", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ goal: intentGoal, specs: spec ? [spec] : [] })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setIntentResult(data);
+        } catch (err: any) {
+            setIntentError(err.message || "Failed to generate integration.");
+        } finally {
+            setIntentLoading(false);
         }
     };
 
@@ -223,6 +275,125 @@ export default function Home() {
         }
     };
 
+    const handleGenerateDiff = async () => {
+        if (!diffUrlA || !diffUrlB) return;
+        setDiffLoading(true);
+        setDiffError(null);
+        try {
+            const specAStr = await fetchRawSpecJSON(diffUrlA);
+            const specBStr = await fetchRawSpecJSON(diffUrlB);
+
+            const res = await fetch("/api/diff", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ specA: specAStr, specB: specBStr })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setDiffResult(data);
+        } catch (err: any) {
+            setDiffError(err.message || "Failed to generate API Diff.");
+        } finally {
+            setDiffLoading(false);
+        }
+    };
+
+    const handleRunAudit = async () => {
+        if (!auditUrl) return;
+        setAuditLoading(true);
+        setAuditError(null);
+        try {
+            const specStr = await fetchRawSpecJSON(auditUrl);
+
+            const res = await fetch("/api/security-audit", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ spec: specStr })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setAuditResult(data);
+        } catch (err: any) {
+            setAuditError(err.message || "Failed to run Security Audit.");
+        } finally {
+            setAuditLoading(false);
+        }
+    };
+
+    const handleDiagnose = async () => {
+        if (!testResponse || testResponse.status < 400 || !selectedEndpoint) return;
+        setDiagnosisLoading(true);
+        try {
+            let finalUrl = selectedEndpoint.path;
+            const queryParams = new URLSearchParams();
+            selectedEndpoint.parameters.forEach(p => {
+                const val = testParams[p.name];
+                if (!val) return;
+                if (p.in === "path") {
+                    finalUrl = finalUrl.replace(`{${p.name}}`, val);
+                } else if (p.in === "query") {
+                    queryParams.append(p.name, val);
+                }
+            });
+            const qString = queryParams.toString();
+            const fullUrl = `${spec?.baseUrl}${finalUrl}${qString ? `?${qString}` : ''}`;
+
+            const res = await fetch("/api/diagnose", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    status: testResponse.status,
+                    responseBody: typeof testResponse.data === 'object' ? JSON.stringify(testResponse.data) : testResponse.data,
+                    requestHeaders: { "Accept": "application/json", ...(selectedEndpoint.requestBody && testParams.body ? { "Content-Type": "application/json" } : {}) },
+                    requestUrl: fullUrl,
+                    requestMethod: selectedEndpoint.method,
+                    requestBody: selectedEndpoint.requestBody ? testParams.body : undefined
+                })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setDiagnosisResult(data);
+        } catch (err: any) {
+            console.error("Diagnosis error:", err);
+        } finally {
+            setDiagnosisLoading(false);
+        }
+    };
+
+    const handleGenerateSDK = async () => {
+        if (!url) return;
+        setSdkLoading(true);
+        setSdkError(null);
+        try {
+            const specStr = await fetchRawSpecJSON(url);
+
+            const res = await fetch("/api/generate-sdk", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ spec: specStr, language: sdkLang })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setSdkResult(data);
+        } catch (err: any) {
+            setSdkError(err.message || "Failed to generate SDK.");
+        } finally {
+            setSdkLoading(false);
+        }
+    };
+
+    const downloadSdkFile = () => {
+        if (!sdkResult?.code) return;
+        const blob = new Blob([sdkResult.code], { type: 'text/plain' });
+        const href = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = href;
+        const ext = sdkLang === 'python' ? 'py' : 'ts';
+        a.download = `${sdkResult.className?.toLowerCase() || 'client'}_sdk.${ext}`;
+        a.click();
+        URL.revokeObjectURL(href);
+    };
+
     const getMethodColor = (method: string) => {
         switch (method.toUpperCase()) {
             case 'GET': return 'bg-blue-500/20 text-blue-500 border-blue-500/50';
@@ -234,14 +405,123 @@ export default function Home() {
     };
 
     return (
-        <div className="flex h-screen overflow-hidden bg-background">
+        <div className="flex h-screen overflow-hidden bg-background relative">
+
+            {/* SDK Generation Modal */}
+            {sdkModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+                    <div className="bg-card w-full max-w-4xl max-h-[90vh] rounded-2xl border border-border flex flex-col overflow-hidden shadow-2xl relative">
+                        <div className="p-6 border-b border-border flex items-center justify-between bg-black/20">
+                            <div>
+                                <h3 className="text-2xl font-bold flex items-center"><Code className="w-6 h-6 mr-3 text-primary" /> Generate SDK</h3>
+                                <p className="text-muted-foreground text-sm mt-1">Instantly build a production-ready client SDK for this API.</p>
+                            </div>
+                            <Button variant="ghost" size="icon" onClick={() => setSdkModalOpen(false)}>
+                                <X className="w-5 h-5" />
+                            </Button>
+                        </div>
+                        <div className="p-6 flex-1 overflow-y-auto">
+                            {!sdkResult ? (
+                                <div className="space-y-6">
+                                    <div className="space-y-3">
+                                        <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Target Language</label>
+                                        <div className="flex space-x-3">
+                                            <button
+                                                onClick={() => setSdkLang("python")}
+                                                className={`px-6 py-3 rounded-xl border flex items-center font-bold transition-all ${sdkLang === 'python' ? 'bg-primary/10 border-primary text-primary' : 'bg-transparent border-border text-muted-foreground hover:bg-white/5'}`}
+                                            >
+                                                Python
+                                            </button>
+                                            <button
+                                                onClick={() => setSdkLang("typescript")}
+                                                className={`px-6 py-3 rounded-xl border flex items-center font-bold transition-all ${sdkLang === 'typescript' ? 'bg-primary/10 border-primary text-primary' : 'bg-transparent border-border text-muted-foreground hover:bg-white/5'}`}
+                                            >
+                                                TypeScript
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <Button
+                                        onClick={handleGenerateSDK}
+                                        disabled={sdkLoading}
+                                        size="lg"
+                                        className="w-full h-14 text-lg font-bold"
+                                    >
+                                        {sdkLoading ? "Building your SDK..." : "Generate SDK"}
+                                    </Button>
+                                    {sdkError && (
+                                        <div className="p-4 bg-destructive/10 text-destructive text-sm rounded-xl border border-destructive/20">
+                                            {sdkError}
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="space-y-8 animate-in fade-in">
+                                    {/* Code Block */}
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-sm font-bold text-muted-foreground uppercase tracking-wider">SDK Source Code</h4>
+                                            <div className="flex space-x-2">
+                                                <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(sdkResult.code)}>
+                                                    <Copy className="w-4 h-4 mr-2" /> Copy
+                                                </Button>
+                                                <Button size="sm" onClick={downloadSdkFile}>
+                                                    <Download className="w-4 h-4 mr-2" /> Download .{sdkLang === 'python' ? 'py' : 'ts'}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                        <div className="h-96 border border-border rounded-xl overflow-hidden">
+                                            <Editor
+                                                height="100%"
+                                                language={sdkLang}
+                                                theme={theme === "dark" ? "vs-dark" : "light"}
+                                                value={sdkResult.code}
+                                                options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13 }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Usage & Dependencies */}
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-3 border border-border p-4 rounded-xl bg-card">
+                                            <h4 className="text-xs font-bold text-primary uppercase tracking-wider">Usage Example</h4>
+                                            <pre className="text-[11px] font-mono text-muted-foreground overflow-x-auto p-2 bg-black/40 rounded">
+                                                {sdkResult.usageExample}
+                                            </pre>
+                                        </div>
+
+                                        <div className="space-y-3 border border-border p-4 rounded-xl bg-card">
+                                            <h4 className="text-xs font-bold text-primary uppercase tracking-wider">Dependencies</h4>
+                                            <div className="space-y-2">
+                                                <div className="text-[11px] font-mono text-muted-foreground bg-black/40 p-2 rounded relative group cursor-pointer" onClick={() => navigator.clipboard.writeText(sdkLang === 'python' ? `pip install ${sdkResult.dependencies.join(' ')}` : `npm install ${sdkResult.dependencies.join(' ')}`)}>
+                                                    <span className="text-green-500 mr-2">$</span>
+                                                    {sdkLang === 'python' ? 'pip install ' : 'npm install '}
+                                                    {sdkResult.dependencies?.join(' ')}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* SIDEBAR - Endpoints */}
-            {spec && (
-                <div className="w-80 border-r border-border bg-card/50 backdrop-blur-sm flex flex-col h-full">
+            {spec && mode === "explorer" && (
+                <div className="w-80 border-r border-border bg-card/50 backdrop-blur-sm flex flex-col h-full z-10 relative">
                     <div className="p-6 border-b border-border">
                         <h2 className="font-bold text-xl truncate" title={spec.title}>{spec.title}</h2>
                         <p className="text-xs text-muted-foreground mt-1 truncate">{spec.baseUrl}</p>
+
+                        <Button
+                            onClick={() => setSdkModalOpen(true)}
+                            variant="outline"
+                            className="w-full mt-4 border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center justify-center space-x-2"
+                        >
+                            <Code className="w-4 h-4" />
+                            <span>Generate SDK</span>
+                        </Button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-2">
                         {spec.endpoints.map((ep, idx) => (
@@ -251,6 +531,7 @@ export default function Home() {
                                     setSelectedEndpoint(ep);
                                     setTestResponse(null);
                                     setTestParams({});
+                                    setDiagnosisResult(null);
                                 }}
                                 className={`w-full text-left p-3 rounded-lg border transition-all text-sm flex items-center space-x-3 
                   ${selectedEndpoint === ep
@@ -276,6 +557,32 @@ export default function Home() {
                         <div className="flex items-center space-x-2">
                             <Bot className="w-6 h-6 text-primary" />
                             <h1 className="font-bold text-lg">Agentic API Copilot</h1>
+                        </div>
+                        <div className="ml-4 flex bg-secondary rounded-lg p-1 border border-border">
+                            <button
+                                onClick={() => setMode("explorer")}
+                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'explorer' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                                Explorer Mode
+                            </button>
+                            <button
+                                onClick={() => setMode("intent")}
+                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'intent' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                                Intent Mode
+                            </button>
+                            <button
+                                onClick={() => setMode("diff")}
+                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'diff' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                                API Diff
+                            </button>
+                            <button
+                                onClick={() => setMode("audit")}
+                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'audit' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                            >
+                                Security Audit
+                            </button>
                         </div>
                         <Button
                             variant="ghost"
@@ -304,9 +611,407 @@ export default function Home() {
                     )}
                 </header>
 
-                {/* Content Body */}
                 <main className="flex-1 overflow-hidden relative">
-                    {!spec ? (
+                    {mode === "diff" ? (
+                        <div className="h-full overflow-y-auto w-full bg-background p-8">
+                            <div className="max-w-5xl mx-auto space-y-8 pb-24">
+                                <div className="text-center space-y-4 pt-4">
+                                    <h2 className="text-3xl font-extrabold tracking-tight">API Diff & Migration</h2>
+                                    <p className="text-muted-foreground text-lg">
+                                        Compare two OpenAPI specs and instantly generate a migration guide.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider">Old Version URL</label>
+                                        <Input
+                                            value={diffUrlA}
+                                            onChange={e => setDiffUrlA(e.target.value)}
+                                            placeholder="Paste old OpenAPI JSON URL..."
+                                            className="w-full h-12 rounded-xl glassmorphism"
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider">New Version URL</label>
+                                        <Input
+                                            value={diffUrlB}
+                                            onChange={e => setDiffUrlB(e.target.value)}
+                                            placeholder="Paste new OpenAPI JSON URL..."
+                                            className="w-full h-12 rounded-xl glassmorphism"
+                                        />
+                                    </div>
+                                </div>
+
+                                <Button
+                                    onClick={handleGenerateDiff}
+                                    disabled={diffLoading || !diffUrlA || !diffUrlB}
+                                    size="lg"
+                                    className="w-full h-14 text-lg font-bold mt-4"
+                                >
+                                    {diffLoading ? "Comparing specs and generating migration guide..." : "Compare & Generate Migration Guide"}
+                                </Button>
+
+                                {diffError && (
+                                    <div className="p-4 bg-destructive/10 text-destructive text-sm rounded-xl">
+                                        {diffError}
+                                    </div>
+                                )}
+
+                                {diffResult && (
+                                    <div className="space-y-8 mt-12 animate-in fade-in slide-in-from-bottom-4">
+
+                                        {/* Change Summary Bar */}
+                                        <div className="flex gap-4">
+                                            <div className="flex-1 p-4 rounded-xl border border-green-500/30 bg-green-500/10 flex items-center justify-between">
+                                                <span className="text-green-500 font-bold">Added</span>
+                                                <span className="text-2xl font-black text-green-400">{diffResult.addedEndpoints?.length || 0}</span>
+                                            </div>
+                                            <div className="flex-1 p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex items-center justify-between">
+                                                <span className="text-red-500 font-bold">Removed</span>
+                                                <span className="text-2xl font-black text-red-400">{diffResult.removedEndpoints?.length || 0}</span>
+                                            </div>
+                                            <div className="flex-1 p-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 flex items-center justify-between">
+                                                <span className="text-yellow-500 font-bold">Modified</span>
+                                                <span className="text-2xl font-black text-yellow-400">{diffResult.modifiedEndpoints?.length || 0}</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Breaking Changes */}
+                                        {diffResult.breakingChanges?.length > 0 && (
+                                            <div className="space-y-4">
+                                                <h3 className="text-2xl font-bold text-red-400 flex items-center"><AlertCircle className="w-5 h-5 mr-2" /> Breaking Changes</h3>
+                                                <div className="grid gap-3">
+                                                    {diffResult.breakingChanges.map((change: string, idx: number) => (
+                                                        <div key={idx} className="p-4 border border-red-500/50 bg-red-500/5 rounded-xl text-red-200 text-sm">
+                                                            {change}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Full Diff Table */}
+                                        <div className="space-y-4">
+                                            <h3 className="text-2xl font-bold">Endpoint Changes</h3>
+                                            <div className="border border-border rounded-xl overflow-hidden bg-card/50">
+                                                <table className="w-full text-sm text-left">
+                                                    <thead className="text-xs uppercase bg-black/40 text-muted-foreground">
+                                                        <tr>
+                                                            <th className="px-6 py-4 border-b border-border">Endpoint</th>
+                                                            <th className="px-6 py-4 border-b border-border">Method</th>
+                                                            <th className="px-6 py-4 border-b border-border">Status</th>
+                                                            <th className="px-6 py-4 border-b border-border">Details</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {diffResult.addedEndpoints?.map((ep: any, idx: number) => (
+                                                            <tr key={`add-${idx}`} className="border-b border-border/50 hover:bg-white/5">
+                                                                <td className="px-6 py-3 font-mono text-foreground/90">{ep.path}</td>
+                                                                <td className="px-6 py-3"><Badge variant="outline" className="text-green-400 border-green-500/50">{ep.method}</Badge></td>
+                                                                <td className="px-6 py-3 text-green-500 font-medium">Added</td>
+                                                                <td className="px-6 py-3 text-muted-foreground">-</td>
+                                                            </tr>
+                                                        ))}
+                                                        {diffResult.removedEndpoints?.map((ep: any, idx: number) => (
+                                                            <tr key={`rem-${idx}`} className="border-b border-border/50 hover:bg-white/5">
+                                                                <td className="px-6 py-3 font-mono text-foreground/90">{ep.path}</td>
+                                                                <td className="px-6 py-3"><Badge variant="outline" className="text-red-400 border-red-500/50">{ep.method}</Badge></td>
+                                                                <td className="px-6 py-3 text-red-500 font-medium">Removed</td>
+                                                                <td className="px-6 py-3 text-muted-foreground">-</td>
+                                                            </tr>
+                                                        ))}
+                                                        {diffResult.modifiedEndpoints?.map((ep: any, idx: number) => (
+                                                            <tr key={`mod-${idx}`} className="border-b border-border/50 hover:bg-white/5">
+                                                                <td className="px-6 py-3 font-mono text-foreground/90">{ep.path}</td>
+                                                                <td className="px-6 py-3"><Badge variant="outline" className="text-yellow-400 border-yellow-500/50">{ep.method}</Badge></td>
+                                                                <td className="px-6 py-3 text-yellow-500 font-medium">Modified</td>
+                                                                <td className="px-6 py-3 text-muted-foreground">{ep.changes}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+
+                                        {/* Migration Guide */}
+                                        <div className="space-y-6 pt-4 border-t border-border">
+                                            <h3 className="text-2xl font-bold flex items-center"><Bot className="w-6 h-6 mr-3 text-primary" /> Migration Guide</h3>
+                                            <div className="p-6 glassmorphism border border-primary/20 rounded-xl bg-primary/5 text-lg leading-relaxed">
+                                                {diffResult.summary}
+                                            </div>
+
+                                            <div className="space-y-4">
+                                                <h4 className="text-lg font-bold text-muted-foreground uppercase tracking-widest text-sm">Steps to Convert</h4>
+                                                <ol className="list-decimal list-inside space-y-3">
+                                                    {diffResult.migrationSteps?.map((step: string, idx: number) => (
+                                                        <li key={idx} className="pl-2 leading-relaxed text-foreground/90">{step}</li>
+                                                    ))}
+                                                </ol>
+                                            </div>
+
+                                            {diffResult.codePatches?.length > 0 && (
+                                                <div className="space-y-4 pt-4">
+                                                    <h4 className="text-lg font-bold text-muted-foreground uppercase tracking-widest text-sm">Code Patches</h4>
+                                                    {diffResult.codePatches.map((patch: any, idx: number) => (
+                                                        <div key={idx} className="border border-border overflow-hidden rounded-xl bg-card">
+                                                            <div className="p-4 border-b border-border bg-black/40">
+                                                                <p className="font-medium text-sm">{patch.description}</p>
+                                                            </div>
+                                                            <div className="grid grid-cols-2 divide-x divide-border">
+                                                                <div className="p-4 bg-red-500/5 text-red-200 font-mono text-xs overflow-x-auto">
+                                                                    <div className="mb-2 text-[#ff6b6b] font-bold text-[10px] uppercase tracking-wider">Before</div>
+                                                                    <pre><code>{patch.before}</code></pre>
+                                                                </div>
+                                                                <div className="p-4 bg-green-500/5 text-green-200 font-mono text-xs overflow-x-auto">
+                                                                    <div className="mb-2 text-[#51cf66] font-bold text-[10px] uppercase tracking-wider">After</div>
+                                                                    <pre><code>{patch.after}</code></pre>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : mode === "audit" ? (
+                        <div className="h-full overflow-y-auto w-full bg-background p-8">
+                            <div className="max-w-5xl mx-auto space-y-8 pb-24">
+                                <div className="text-center space-y-4 pt-4">
+                                    <h2 className="text-3xl font-extrabold tracking-tight">API Security Audit</h2>
+                                    <p className="text-muted-foreground text-lg">
+                                        Scan OpenAPI specifications for vulnerabilities and structural risks automatically.
+                                    </p>
+                                </div>
+
+                                <div className="max-w-3xl mx-auto space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-bold text-muted-foreground uppercase tracking-wider">OpenAPI Spec URL</label>
+                                        <Input
+                                            value={auditUrl}
+                                            onChange={e => setAuditUrl(e.target.value)}
+                                            placeholder="Paste OpenAPI JSON URL to audit..."
+                                            className="w-full h-14 rounded-xl glassmorphism text-lg"
+                                        />
+                                    </div>
+                                    <Button
+                                        onClick={handleRunAudit}
+                                        disabled={auditLoading || !auditUrl}
+                                        size="lg"
+                                        className="w-full h-14 text-lg font-bold"
+                                    >
+                                        {auditLoading ? "Scanning for vulnerabilities..." : "Run Security Audit"}
+                                    </Button>
+
+                                    {auditError && (
+                                        <div className="p-4 bg-destructive/10 border border-destructive/20 text-destructive text-sm rounded-xl">
+                                            {auditError}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {auditResult && (
+                                    <div className="space-y-8 mt-12 animate-in fade-in slide-in-from-bottom-4">
+
+                                        {/* Risk Score Card */}
+                                        <div className="flex flex-col items-center justify-center p-8 rounded-3xl border border-white/5 bg-card/40 glassmorphism relative overflow-hidden">
+                                            <div className={`absolute inset-0 opacity-10 ${auditResult.riskScore < 30 ? 'bg-green-500' : auditResult.riskScore < 60 ? 'bg-yellow-500' : auditResult.riskScore < 80 ? 'bg-orange-500' : 'bg-red-500'}`}></div>
+
+                                            <div className="relative z-10 flex flex-col items-center text-center">
+                                                <h3 className="text-sm font-black uppercase tracking-widest text-muted-foreground mb-4">Overall Security Risk</h3>
+
+                                                <div className={`relative flex items-center justify-center w-48 h-48 rounded-full border-[12px] shadow-inner mb-4
+                                                    ${auditResult.riskScore < 30 ? 'border-green-500/80 text-green-400' :
+                                                        auditResult.riskScore < 60 ? 'border-yellow-500/80 text-yellow-400' :
+                                                            auditResult.riskScore < 80 ? 'border-orange-500/80 text-orange-400' :
+                                                                'border-red-500/80 text-red-500 shadow-[0_0_50px_rgba(239,68,68,0.4)]'}`}>
+                                                    <span className="text-6xl font-black">{auditResult.riskScore}</span>
+                                                </div>
+
+                                                <Badge variant="outline" className={`text-xl px-6 py-2 uppercase tracking-widest font-black border-2
+                                                    ${auditResult.riskScore < 30 ? 'border-green-500 text-green-500' :
+                                                        auditResult.riskScore < 60 ? 'border-yellow-500 text-yellow-500' :
+                                                            auditResult.riskScore < 80 ? 'border-orange-500 text-orange-500' :
+                                                                'border-red-500 text-red-500 animate-pulse'}`}>
+                                                    {auditResult.riskLevel}
+                                                </Badge>
+                                            </div>
+                                        </div>
+
+                                        {/* Quick Stats Row */}
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                            <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex flex-col items-center justify-center text-center">
+                                                <span className="text-3xl font-black text-red-500">{auditResult.noAuthEndpoints?.length || 0}</span>
+                                                <span className="text-xs font-bold text-red-400 uppercase tracking-widest mt-1">Unprotected<br />Endpoints</span>
+                                            </div>
+                                            <div className="p-4 rounded-xl border border-orange-500/30 bg-orange-500/10 flex flex-col items-center justify-center text-center">
+                                                <span className="text-3xl font-black text-orange-500">{auditResult.sensitiveDataExposed?.length || 0}</span>
+                                                <span className="text-xs font-bold text-orange-400 uppercase tracking-widest mt-1">Sensitive Data<br />Exposed</span>
+                                            </div>
+                                            <div className="p-4 rounded-xl border border-yellow-500/30 bg-yellow-500/10 flex flex-col items-center justify-center text-center">
+                                                <span className="text-3xl font-black text-yellow-500">{auditResult.missingHttps?.length || 0}</span>
+                                                <span className="text-xs font-bold text-yellow-400 uppercase tracking-widest mt-1">HTTPS<br />Issues</span>
+                                            </div>
+                                            <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex flex-col items-center justify-center text-center">
+                                                <span className="text-3xl font-black text-red-500">{auditResult.adminEndpointsUnprotected?.length || 0}</span>
+                                                <span className="text-xs font-bold text-red-400 uppercase tracking-widest mt-1">Admin Endpoints<br />At Risk</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Findings List */}
+                                        <div className="space-y-4 pt-8">
+                                            <h3 className="text-2xl font-bold flex items-center"><AlertCircle className="w-6 h-6 mr-3" /> Detailed Findings</h3>
+                                            <div className="space-y-4">
+                                                {auditResult.findings?.map((finding: any, idx: number) => {
+                                                    const isCritical = finding.severity.toLowerCase() === 'critical';
+                                                    const isHigh = finding.severity.toLowerCase() === 'high';
+                                                    const isMedium = finding.severity.toLowerCase() === 'medium';
+
+                                                    return (
+                                                        <div key={idx} className={`p-6 rounded-xl border bg-card/60 glassmorphism relative overflow-hidden transition-all
+                                                            ${isCritical ? 'border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.2)] hover:shadow-[0_0_25px_rgba(239,68,68,0.4)]' :
+                                                                isHigh ? 'border-orange-500/50' :
+                                                                    isMedium ? 'border-yellow-500/50' :
+                                                                        'border-blue-500/50'}`}>
+
+                                                            <div className="flex justify-between items-start mb-4">
+                                                                <h4 className="text-lg font-bold pr-8">{finding.title}</h4>
+                                                                <Badge variant="outline" className={`uppercase tracking-widest text-[10px] font-black border
+                                                                    ${isCritical ? 'bg-red-500 text-white border-red-500 animate-pulse' :
+                                                                        isHigh ? 'text-orange-400 border-orange-500/50' :
+                                                                            isMedium ? 'text-yellow-400 border-yellow-500/50' :
+                                                                                'text-blue-400 border-blue-500/50'}`}>
+                                                                    {finding.severity}
+                                                                </Badge>
+                                                            </div>
+                                                            <p className="text-muted-foreground text-sm mb-4 leading-relaxed">{finding.description}</p>
+                                                            <div className="bg-black/40 rounded-lg p-4 border border-white/5">
+                                                                <span className="text-xs font-black uppercase tracking-widest text-primary/80 mb-2 block">Recommendation</span>
+                                                                <p className="text-sm font-medium">{finding.recommendation}</p>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Executive Summary */}
+                                        <div className="space-y-4 pt-8 pb-8 border-b border-border/50">
+                                            <h3 className="text-lg font-black uppercase tracking-widest text-muted-foreground">Executive Summary</h3>
+                                            <div className="p-6 border-l-4 border-primary bg-card/30 text-lg leading-relaxed shadow-sm">
+                                                {auditResult.summary}
+                                            </div>
+                                        </div>
+
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : mode === "intent" ? (
+                        <div className="h-full overflow-y-auto w-full bg-background p-8">
+                            <div className="max-w-4xl mx-auto space-y-8 pb-24">
+                                <div className="text-center space-y-4 pt-4">
+                                    <h2 className="text-3xl font-extrabold tracking-tight">Intent-to-Integration</h2>
+                                    <p className="text-muted-foreground text-lg">
+                                        Describe your goal in natural language, and let the AI figure out the full multi-step integration plan.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-4">
+                                    <Textarea
+                                        value={intentGoal}
+                                        onChange={e => setIntentGoal(e.target.value)}
+                                        placeholder="Describe what you want to build — e.g. 'Fetch GitHub repos and post a summary to Slack'"
+                                        className="w-full text-lg p-6 min-h-[120px] rounded-xl glassmorphism"
+                                    />
+                                    <Button
+                                        onClick={handleGenerateIntent}
+                                        disabled={intentLoading || !intentGoal.trim()}
+                                        size="lg"
+                                        className="w-full h-14 text-lg font-bold"
+                                    >
+                                        {intentLoading ? "Thinking like a senior engineer..." : "Generate Integration"}
+                                    </Button>
+                                    {intentError && (
+                                        <div className="p-4 bg-destructive/10 text-destructive text-sm rounded-xl">
+                                            {intentError}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {intentResult && (
+                                    <div className="space-y-8 mt-12 animate-in fade-in slide-in-from-bottom-4">
+                                        {/* Auth Notes */}
+                                        {intentResult.authNotes && (
+                                            <div className="bg-yellow-500/10 border border-yellow-500/50 text-yellow-500 p-6 rounded-xl flex items-start space-x-4">
+                                                <AlertCircle className="w-6 h-6 flex-shrink-0 mt-0.5" />
+                                                <div>
+                                                    <h3 className="font-bold text-lg mb-1">Auth Notes</h3>
+                                                    <p className="text-sm opacity-90">{intentResult.authNotes}</p>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Step-by-step Plan */}
+                                        {(intentResult.steps && intentResult.steps.length > 0) && (
+                                            <div className="space-y-4">
+                                                <h3 className="text-2xl font-bold">Integration Plan</h3>
+                                                <div className="grid gap-4">
+                                                    {intentResult.steps.map((step: any, idx: number) => (
+                                                        <div key={idx} className="flex space-x-4 p-5 bg-card border border-border rounded-xl shadow-sm relative overflow-hidden">
+                                                            <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold flex-shrink-0 z-10">
+                                                                {idx + 1}
+                                                            </div>
+                                                            <div className="flex-1 z-10">
+                                                                <div className="font-bold text-lg">{step.title}</div>
+                                                                <p className="text-muted-foreground text-sm mt-1">{step.description}</p>
+                                                                {step.api && <Badge variant="outline" className="mt-2">{step.api}</Badge>}
+                                                            </div>
+                                                            <div className="absolute right-0 top-0 bottom-0 pr-4 flex items-center opacity-10 blur-sm pointer-events-none">
+                                                                <span className="text-6xl font-black">{idx + 1}</span>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Code Tabs */}
+                                        <div className="border border-border rounded-xl bg-card overflow-hidden">
+                                            <div className="flex border-b border-border bg-black/20">
+                                                {[
+                                                    { id: "python", label: "Python" },
+                                                    { id: "js", label: "JavaScript" },
+                                                    { id: "curl", label: "cURL" }
+                                                ].map(tab => (
+                                                    <button
+                                                        key={tab.id}
+                                                        onClick={() => setActiveCodeTab(tab.id as any)}
+                                                        className={`px-6 py-3 text-sm font-bold transition-colors ${activeCodeTab === tab.id ? 'bg-background text-primary border-b-2 border-primary' : 'text-muted-foreground hover:bg-white/5'}`}
+                                                    >
+                                                        {tab.label}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            <div className="p-6 overflow-x-auto text-sm font-mono text-green-300 bg-black/40">
+                                                <pre>
+                                                    <code>
+                                                        {activeCodeTab === "python" ? intentResult.code :
+                                                            activeCodeTab === "js" ? intentResult.jsCode :
+                                                                (intentResult.curlCommands || []).join("\\n\\n")}
+                                                    </code>
+                                                </pre>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : !spec ? (
                         <div className="h-full overflow-y-auto w-full">
                             <div className="max-w-5xl mx-auto space-y-16 px-6 py-12 pb-24">
 
@@ -533,6 +1238,72 @@ export default function Home() {
                                                             {JSON.stringify(testResponse.data, null, 2)}
                                                         </pre>
                                                     </div>
+                                                    {testResponse.status >= 400 && (
+                                                        <div className="mt-4 border-t border-border/50 pt-4">
+                                                            {!diagnosisResult ? (
+                                                                <Button onClick={handleDiagnose} disabled={diagnosisLoading} variant="outline" className="w-full border-red-500/30 hover:bg-red-500/10 text-red-500 glassmorphism">
+                                                                    <Search className="w-4 h-4 mr-2" />
+                                                                    {diagnosisLoading ? "Investigating the error..." : "Analyze Error"}
+                                                                </Button>
+                                                            ) : (
+                                                                <div className="border border-red-500/50 bg-red-500/5 rounded-xl p-6 space-y-6 relative overflow-hidden glassmorphism mt-4">
+                                                                    <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+                                                                        <Search className="w-24 h-24 text-red-500" />
+                                                                    </div>
+
+                                                                    <div className="flex items-center space-x-3 relative z-10">
+                                                                        <Search className="w-6 h-6 text-red-400" />
+                                                                        <h3 className="text-xl font-bold text-red-400">Error Detective</h3>
+                                                                        <Badge variant="outline" className={`ml-auto capitalize ${diagnosisResult.severity === 'critical' ? 'border-red-500 text-red-500' :
+                                                                            diagnosisResult.severity === 'warning' ? 'border-yellow-500 text-yellow-500' :
+                                                                                'border-blue-500 text-blue-500'
+                                                                            }`}>
+                                                                            {diagnosisResult.severity}
+                                                                        </Badge>
+                                                                    </div>
+
+                                                                    <div className="space-y-4 relative z-10">
+                                                                        <div>
+                                                                            <h4 className="text-sm font-bold text-red-400/80 mb-1 uppercase tracking-wider">What went wrong</h4>
+                                                                            <p className="text-foreground">{diagnosisResult.diagnosis}</p>
+                                                                        </div>
+                                                                        <div>
+                                                                            <h4 className="text-sm font-bold text-red-400/80 mb-1 uppercase tracking-wider">Why it happened</h4>
+                                                                            <p className="text-foreground/80 text-sm leading-relaxed">{diagnosisResult.rootCause}</p>
+                                                                        </div>
+                                                                        <div>
+                                                                            <h4 className="text-sm font-bold text-red-400/80 mb-1 uppercase tracking-wider">How to fix it</h4>
+                                                                            <p className="text-foreground/80 text-sm leading-relaxed">{diagnosisResult.fix}</p>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {diagnosisResult.fixedCode && (
+                                                                        <div className="relative z-10 mt-6 rounded-lg border border-red-500/20 bg-black/40 overflow-hidden">
+                                                                            <div className="flex items-center justify-between px-4 py-2 border-b border-red-500/20 bg-red-500/10">
+                                                                                <span className="text-[10px] font-bold tracking-wider text-red-300 uppercase">Suggested Code Fix</span>
+                                                                                <button
+                                                                                    className="text-[10px] flex items-center space-x-1 text-red-400 hover:text-red-300 transition-colors"
+                                                                                    onClick={(e) => {
+                                                                                        navigator.clipboard.writeText(diagnosisResult.fixedCode);
+                                                                                        const btn = e.currentTarget;
+                                                                                        const originalText = btn.innerHTML;
+                                                                                        btn.innerHTML = '<span class="text-green-400">Copied!</span>';
+                                                                                        setTimeout(() => btn.innerHTML = originalText, 2000);
+                                                                                    }}
+                                                                                >
+                                                                                    <Copy className="w-3 h-3" />
+                                                                                    <span>Copy Fix</span>
+                                                                                </button>
+                                                                            </div>
+                                                                            <div className="p-4 overflow-x-auto text-[12px] font-mono text-red-200">
+                                                                                <pre><code>{diagnosisResult.fixedCode}</code></pre>
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
                                         </CardContent>
@@ -614,7 +1385,7 @@ export default function Home() {
                         </div>
                     ) : null}
                 </main>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 }
