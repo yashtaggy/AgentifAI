@@ -11,6 +11,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Bot, Link, Send, Code, Play, AlertCircle, ChevronRight, Check, Search, Shield, Copy, Sun, Moon, X, Download } from "lucide-react";
 import Editor from "@monaco-editor/react";
+import { useAuth } from "@/context/AuthContext";
+import { LogOut } from "lucide-react";
 
 const MessageContent = ({ content, theme }: { content: string, theme: "dark" | "light" }) => {
     // Split text by markdown code blocks
@@ -71,6 +73,7 @@ const MessageContent = ({ content, theme }: { content: string, theme: "dark" | "
 };
 
 export default function Home() {
+    const { user, logout } = useAuth();
     const [url, setUrl] = useState("https://petstore.swagger.io/v2/swagger.json");
     const [spec, setSpec] = useState<ApiSpec | null>(null);
     const [loading, setLoading] = useState(false);
@@ -552,37 +555,55 @@ export default function Home() {
             <div className="flex-1 flex flex-col h-full overflow-hidden">
 
                 {/* Header / Landing Input */}
-                <header className="flex-none p-6 border-b border-border bg-background z-10 flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                        <div className="flex items-center space-x-2">
-                            <img src="/Orion.png" alt="Orion" className="h-[36px] w-auto object-contain" />
+                <header className="flex-none p-6 border-b border-border bg-background z-10 grid grid-cols-3 items-center">
+                    <div className="flex justify-start">
+                        <div
+                            className="flex items-center space-x-2 cursor-pointer transition-opacity hover:opacity-80"
+                            onClick={() => { setSpec(null); setUrl(""); setMode("explorer"); }}
+                            title="Go back to Home"
+                        >
+                            <img src="/Orion.png" alt="Orion" className="h-[36px] w-auto object-contain dark:invert-0 invert" />
                         </div>
-                        <div className="ml-4 flex bg-secondary rounded-lg p-1 border border-border">
+                    </div>
+                    <div className="flex justify-center -ml-8 md:-ml-16">
+                        <div className="hidden md:flex bg-secondary rounded-xl p-1.5 border border-border w-[600px] gap-1">
                             <button
                                 onClick={() => setMode("explorer")}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'explorer' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${mode === 'explorer' ? 'bg-background shadow-sm text-foreground scale-100' : 'text-muted-foreground hover:text-foreground hover:bg-black/5 scale-[0.98]'}`}
                             >
                                 Explorer Mode
                             </button>
                             <button
                                 onClick={() => setMode("intent")}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'intent' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${mode === 'intent' ? 'bg-background shadow-sm text-foreground scale-100' : 'text-muted-foreground hover:text-foreground hover:bg-black/5 scale-[0.98]'}`}
                             >
                                 Intent Mode
                             </button>
                             <button
                                 onClick={() => setMode("diff")}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'diff' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${mode === 'diff' ? 'bg-background shadow-sm text-foreground scale-100' : 'text-muted-foreground hover:text-foreground hover:bg-black/5 scale-[0.98]'}`}
                             >
                                 API Diff
                             </button>
                             <button
                                 onClick={() => setMode("audit")}
-                                className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'audit' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                className={`flex-1 px-4 py-2 text-sm font-bold rounded-lg transition-all ${mode === 'audit' ? 'bg-background shadow-sm text-foreground scale-100' : 'text-muted-foreground hover:text-foreground hover:bg-black/5 scale-[0.98]'}`}
                             >
                                 Security Audit
                             </button>
                         </div>
+                    </div>
+                    <div className="flex justify-end items-center space-x-2">
+                        {user && (
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={logout}
+                                className="text-red-500 hover:text-red-600 hover:bg-red-500/10"
+                            >
+                                <LogOut className="w-4 h-4 mr-2" /> Logout
+                            </Button>
+                        )}
                         <Button
                             variant="ghost"
                             size="icon"
@@ -592,22 +613,6 @@ export default function Home() {
                             {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
                         </Button>
                     </div>
-                    {spec && (
-                        <div className="flex items-center space-x-3 w-1/2">
-                            <div className="relative flex-1">
-                                <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                                <Input
-                                    value={url}
-                                    onChange={e => setUrl(e.target.value)}
-                                    placeholder="Paste OpenAPI / Swagger JSON URL..."
-                                    className="pl-9 glassmorphism"
-                                />
-                            </div>
-                            <Button onClick={() => handleParse()} disabled={loading}>
-                                {loading ? "Parsing..." : "Parse API"}
-                            </Button>
-                        </div>
-                    )}
                 </header>
 
                 <main className="flex-1 overflow-hidden relative">
