@@ -1273,7 +1273,7 @@ export default function Home() {
                                                     <Code className="w-5 h-5 text-accent" />
                                                 </div>
                                                 <p className="text-foreground text-sm font-sans leading-relaxed">
-                                                    Describe what you're trying to build in plain English. Get back a step-by-step plan and working code in Python, JavaScript, and cURL — grounded in the actual spec, not a guess.
+                                                    Describe what you&apos;re trying to build in plain English... Get back a step-by-step plan and working code in Python, JavaScript, and cURL — grounded in the actual spec, not a guess.
                                                 </p>
                                             </div>
                                             <div className="mt-6 pt-4 border-t border-border/60 flex items-center justify-between">
@@ -1610,11 +1610,10 @@ export default function Home() {
                                                                             <button
                                                                                 onClick={() => setVariableStore(prev => ({ ...prev, [item.key]: item.value }))}
                                                                                 disabled={isSaved}
-                                                                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
-                                                                                    isSaved
+                                                                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${isSaved
                                                                                         ? "bg-cyan-500/40 text-cyan-100 cursor-default"
                                                                                         : "bg-cyan-500 hover:bg-cyan-400 text-black cursor-pointer"
-                                                                                }`}
+                                                                                    }`}
                                                                             >
                                                                                 {isSaved ? "Saved" : "Save"}
                                                                             </button>
