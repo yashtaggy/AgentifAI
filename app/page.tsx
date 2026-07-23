@@ -9,10 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Bot, Link, Send, Code, Play, AlertCircle, ChevronRight, Check, Search, Shield, Copy, Sun, Moon, X, Download } from "lucide-react";
+import { Bot, Link, Send, Code, Play, AlertCircle, ChevronRight, Check, Search, Shield, Copy, Sun, Moon, X, Download, Link2, Sparkles, Plus, Trash2, Save } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { useAuth } from "@/context/AuthContext";
 import { LogOut } from "lucide-react";
+import { extractTargetVariables, substituteVariables, ExtractedVar } from "@/lib/chainVariables";
+import { VariableInput } from "@/components/VariableInput";
+import { VariableStorePanel } from "@/components/VariableStorePanel";
+import { ApiMetaphorAnimation } from "@/components/ApiMetaphorAnimation";
 
 const MessageContent = ({ content, theme }: { content: string, theme: "dark" | "light" }) => {
     // Split text by markdown code blocks
@@ -85,7 +89,6 @@ export default function Home() {
     const [chatInput, setChatInput] = useState("");
     const [chatLoading, setChatLoading] = useState(false);
 
-    const [theme, setTheme] = useState<"dark" | "light">("dark");
     const [testParams, setTestParams] = useState<Record<string, string>>({});
     const [testResponse, setTestResponse] = useState<any>(null);
     const [testLoading, setTestLoading] = useState(false);
@@ -122,12 +125,39 @@ export default function Home() {
     const [sdkResult, setSdkResult] = useState<any>(null);
     const [sdkError, setSdkError] = useState<string | null>(null);
 
+    // Chain Variables State
+    const [variableStore, setVariableStore] = useState<Record<string, string>>({});
+    const [extractedVars, setExtractedVars] = useState<ExtractedVar[]>([]);
+    const [chainSuggestions, setChainSuggestions] = useState<Array<{ from: string; to: string; confidence: number; rationale?: string }>>([]);
+    const [suggestLoading, setSuggestLoading] = useState(false);
+    const [customHeaders, setCustomHeaders] = useState<Array<{ key: string; value: string }>>([
+        { key: "", value: "" }
+    ]);
+    const [isVarStoreOpen, setIsVarStoreOpen] = useState(true);
+
+    const variableStoreRef = React.useRef(variableStore);
+    useEffect(() => {
+        variableStoreRef.current = variableStore;
+    }, [variableStore]);
+
+    const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+    useEffect(() => {
+        const saved = localStorage.getItem("orion_theme") as "dark" | "light" | null;
+        if (saved) {
+            setTheme(saved);
+        } else if (typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: light)").matches) {
+            setTheme("light");
+        }
+    }, []);
+
     useEffect(() => {
         if (theme === "dark") {
             document.documentElement.classList.add("dark");
         } else {
             document.documentElement.classList.remove("dark");
         }
+        localStorage.setItem("orion_theme", theme);
     }, [theme]);
 
     const handleParse = async (overrideUrl?: string) => {
@@ -210,6 +240,30 @@ export default function Home() {
         }
     };
 
+    const handleEditorMount = (editor: any, monaco: any) => {
+        monaco.languages.registerCompletionItemProvider('json', {
+            triggerCharacters: ['{', '"'],
+            provideCompletionItems: (model: any, position: any) => {
+                const word = model.getWordUntilPosition(position);
+                const range = {
+                    startLineNumber: position.lineNumber,
+                    endLineNumber: position.lineNumber,
+                    startColumn: word.startColumn,
+                    endColumn: word.endColumn
+                };
+                const suggestions = Object.keys(variableStoreRef.current).map(key => ({
+                    label: `{{${key}}}`,
+                    kind: monaco.languages.CompletionItemKind.Variable,
+                    insertText: `{{${key}}}`,
+                    detail: `Value: ${variableStoreRef.current[key]}`,
+                    documentation: `Chain variable: ${key} = ${variableStoreRef.current[key]}`,
+                    range: range
+                }));
+                return { suggestions };
+            }
+        });
+    };
+
     const handleTestApi = async () => {
         if (!selectedEndpoint || !spec) return;
 
@@ -217,15 +271,30 @@ export default function Home() {
         try {
             let finalUrl = selectedEndpoint.path;
             const queryParams = new URLSearchParams();
+            const requestHeaders: Record<string, string> = {
+                "Accept": "application/json"
+            };
 
+            // Substitute variables in parameters
             selectedEndpoint.parameters.forEach(p => {
-                const val = testParams[p.name];
+                let val = testParams[p.name];
                 if (!val) return;
+
+                val = substituteVariables(val, variableStore);
 
                 if (p.in === "path") {
                     finalUrl = finalUrl.replace(`{${p.name}}`, val);
                 } else if (p.in === "query") {
                     queryParams.append(p.name, val);
+                } else if (p.in === "header") {
+                    requestHeaders[p.name] = val;
+                }
+            });
+
+            // Process custom headers with variable substitution
+            customHeaders.forEach(h => {
+                if (h.key.trim() && h.value.trim()) {
+                    requestHeaders[h.key.trim()] = substituteVariables(h.value.trim(), variableStore);
                 }
             });
 
@@ -234,14 +303,13 @@ export default function Home() {
 
             let fetchOpts: RequestInit = {
                 method: selectedEndpoint.method,
-                headers: {
-                    "Accept": "application/json"
-                }
+                headers: requestHeaders
             };
 
-            // Basic testing - doesn't handle all complex bodies or auth perfectly yet
-            if (selectedEndpoint.requestBody && testParams.body) {
-                fetchOpts.body = testParams.body;
+            let bodyData = testParams.body || '';
+            if (selectedEndpoint.requestBody && bodyData) {
+                bodyData = substituteVariables(bodyData, variableStore);
+                fetchOpts.body = bodyData;
                 // @ts-ignore
                 fetchOpts.headers["Content-Type"] = "application/json";
             }
@@ -260,7 +328,12 @@ export default function Home() {
                 data: parsedData,
             });
 
-            if (!res.ok) {
+            // Auto-extract variables on successful response (status 200-299)
+            if (res.status >= 200 && res.status < 300) {
+                const extracted = extractTargetVariables(parsedData);
+                setExtractedVars(extracted);
+            } else {
+                setExtractedVars([]);
                 // Automatically ask AI for help
                 setMessages(prev => [...prev, {
                     role: "system",
@@ -273,8 +346,49 @@ export default function Home() {
 
         } catch (err: any) {
             setTestResponse({ error: err.message });
+            setExtractedVars([]);
         } finally {
             setTestLoading(false);
+        }
+    };
+
+    const handleSuggestChain = async () => {
+        if (!testResponse?.data || !selectedEndpoint) return;
+        setSuggestLoading(true);
+        try {
+            const res = await fetch("/api/suggest-chain", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    responseBody: testResponse.data,
+                    nextEndpoint: selectedEndpoint
+                })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+            setChainSuggestions(data.suggestions || []);
+        } catch (err: any) {
+            console.error("Suggest Chain error:", err);
+            setChainSuggestions([]);
+        } finally {
+            setSuggestLoading(false);
+        }
+    };
+
+    const applySuggestion = (s: { from: string; to: string }) => {
+        const paramMatch = selectedEndpoint?.parameters.find(p => p.name.toLowerCase() === s.to.toLowerCase());
+        if (paramMatch) {
+            setTestParams(prev => ({ ...prev, [paramMatch.name]: `{{${s.from}}}` }));
+        } else if (s.to.toLowerCase().includes("auth") || s.to.toLowerCase().includes("token") || s.to.toLowerCase().includes("header")) {
+            setCustomHeaders(prev => {
+                const exists = prev.some(h => h.key.toLowerCase() === s.to.toLowerCase());
+                if (exists) {
+                    return prev.map(h => h.key.toLowerCase() === s.to.toLowerCase() ? { ...h, value: `{{${s.from}}}` } : h);
+                }
+                return [...prev, { key: s.to, value: `{{${s.from}}}` }];
+            });
+        } else {
+            setTestParams(prev => ({ ...prev, [s.to]: `{{${s.from}}}` }));
         }
     };
 
@@ -510,45 +624,60 @@ export default function Home() {
                 </div>
             )}
 
-            {/* SIDEBAR - Endpoints */}
+            {/* SIDEBAR - Endpoints & Variable Store */}
             {spec && mode === "explorer" && (
-                <div className="w-80 border-r border-border bg-card/50 backdrop-blur-sm flex flex-col h-full z-10 relative">
-                    <div className="p-6 border-b border-border">
-                        <h2 className="font-bold text-xl truncate" title={spec.title}>{spec.title}</h2>
-                        <p className="text-xs text-muted-foreground mt-1 truncate">{spec.baseUrl}</p>
+                <>
+                    <div className="w-80 border-r border-border bg-card/50 backdrop-blur-sm flex flex-col h-full z-10 relative">
+                        <div className="p-6 border-b border-border">
+                            <h2 className="font-bold text-xl truncate" title={spec.title}>{spec.title}</h2>
+                            <p className="text-xs text-muted-foreground mt-1 truncate">{spec.baseUrl}</p>
 
-                        <Button
-                            onClick={() => setSdkModalOpen(true)}
-                            variant="outline"
-                            className="w-full mt-4 border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center justify-center space-x-2"
-                        >
-                            <Code className="w-4 h-4" />
-                            <span>Generate SDK</span>
-                        </Button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                        {spec.endpoints.map((ep, idx) => (
-                            <button
-                                key={idx}
-                                onClick={() => {
-                                    setSelectedEndpoint(ep);
-                                    setTestResponse(null);
-                                    setTestParams({});
-                                    setDiagnosisResult(null);
-                                }}
-                                className={`w-full text-left p-3 rounded-lg border transition-all text-sm flex items-center space-x-3 
-                  ${selectedEndpoint === ep
-                                        ? 'bg-accent border-accent-foreground/20'
-                                        : 'border-transparent hover:bg-white/5'}`}
+                            <Button
+                                onClick={() => setSdkModalOpen(true)}
+                                variant="outline"
+                                className="w-full mt-4 border-primary/50 text-primary hover:bg-primary/10 transition-colors flex items-center justify-center space-x-2"
                             >
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getMethodColor(ep.method)}`}>
-                                    {ep.method}
-                                </span>
-                                <span className="font-mono text-xs truncate flex-1">{ep.path}</span>
-                            </button>
-                        ))}
+                                <Code className="w-4 h-4" />
+                                <span>Generate SDK</span>
+                            </Button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                            {spec.endpoints.map((ep, idx) => (
+                                <button
+                                    key={idx}
+                                    onClick={() => {
+                                        setSelectedEndpoint(ep);
+                                        setTestResponse(null);
+                                        setTestParams({});
+                                        setDiagnosisResult(null);
+                                        setChainSuggestions([]);
+                                    }}
+                                    className={`w-full text-left p-3 rounded-lg border transition-all text-sm flex items-center space-x-3 
+                      ${selectedEndpoint === ep
+                                            ? 'bg-surface-raised border-border border-l-2 border-l-accent shadow-theme'
+                                            : 'border-transparent hover:bg-surface-raised/60 dark:hover:bg-white/5'}`}
+                                >
+                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${getMethodColor(ep.method)}`}>
+                                        {ep.method}
+                                    </span>
+                                    <span className={`font-mono text-xs truncate flex-1 ${selectedEndpoint === ep ? 'text-foreground font-semibold' : 'text-foreground/70'}`}>{ep.path}</span>
+                                </button>
+                            ))}
+                        </div>
                     </div>
-                </div>
+
+                    <VariableStorePanel
+                        variables={variableStore}
+                        onSaveVariable={(k, v) => setVariableStore(prev => ({ ...prev, [k]: v }))}
+                        onDeleteVariable={(k) => setVariableStore(prev => {
+                            const copy = { ...prev };
+                            delete copy[k];
+                            return copy;
+                        })}
+                        isOpen={isVarStoreOpen}
+                        onToggleOpen={() => setIsVarStoreOpen(!isVarStoreOpen)}
+                    />
+                </>
             )}
 
             {/* MAIN CONTENT AREA */}
@@ -558,11 +687,12 @@ export default function Home() {
                 <header className="flex-none p-6 border-b border-border bg-background z-10 grid grid-cols-3 items-center">
                     <div className="flex justify-start">
                         <div
-                            className="flex items-center space-x-2 cursor-pointer transition-opacity hover:opacity-80"
+                            className="flex items-center space-x-3 cursor-pointer transition-opacity hover:opacity-80 group"
                             onClick={() => { setSpec(null); setUrl(""); setMode("explorer"); }}
                             title="Go back to Home"
                         >
-                            <img src="/Orion.png" alt="Orion" className="h-[36px] w-auto object-contain dark:invert-0 invert" />
+                            <img src="/Orion.png" alt="Orion" className="h-[36px] w-auto object-contain dark:invert-0 invert flex-shrink-0" />
+                            <span className="font-display font-bold text-xl text-foreground tracking-tight group-hover:text-accent transition-colors">Orion</span>
                         </div>
                     </div>
                     <div className="flex justify-center -ml-8 md:-ml-16">
@@ -1017,152 +1147,271 @@ export default function Home() {
                         </div>
                     ) : !spec ? (
                         <div className="h-full overflow-y-auto w-full">
-                            <div className="max-w-5xl mx-auto space-y-16 px-6 py-12 pb-24">
+                            <div className="max-w-6xl mx-auto space-y-16 px-6 py-10 pb-24">
 
-                                {/* Hero Section */}
-                                <div className="text-center space-y-6 pt-8">
-                                    <h2 className="text-4xl md:text-5xl font-extrabold tracking-tight">AI-Powered API Explorer</h2>
-                                    <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-                                        Paste an OpenAPI JSON spec URL below to instantly generate a developer dashboard, ask AI to write implementation code, or seamlessly test endpoints.
+                                {/* Hero Brand Block + Signature Metaphor Animation */}
+                                {/* Brand Header — large logo + wordmark */}
+                                <div className="flex flex-col items-center text-center pt-2 pb-4 space-y-4">
+                                    <div className="flex items-center gap-5">
+                                        <div className="relative">
+                                            <div className="absolute inset-0 rounded-3xl bg-accent/20 blur-2xl scale-150" />
+                                            <img
+                                                src="/Orion.png"
+                                                alt="Orion Logo"
+                                                className="relative h-20 w-auto object-contain dark:invert-0 invert drop-shadow-xl"
+                                            />
+                                        </div>
+                                        <div className="text-left">
+                                            <h1 className="font-display font-black text-5xl md:text-6xl lg:text-7xl text-foreground tracking-tight leading-none">
+                                                Orion
+                                            </h1>
+                                            <p className="font-mono text-xs uppercase tracking-widest text-accent font-semibold mt-1.5">
+                                                API Intelligence Layer
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <p className="text-foreground/75 text-base md:text-lg max-w-2xl font-sans leading-relaxed">
+                                        Paste any OpenAPI or Swagger URL to instantly generate a full developer explorer, execute live calls, compute diffs, and run automated security audits.
+                                    </p>
+                                    <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-mono border border-accent/30 bg-accent/10 text-accent font-semibold">
+                                        <Sparkles className="w-3.5 h-3.5" />
+                                        <span>Powered by LLaMA 3.3 70B via Groq</span>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                                    <div className="lg:col-span-7 space-y-5">
+
+                                        {/* Central Parsing Input */}
+                                        <div className="w-full flex flex-col space-y-4 pt-2">
+                                            <div className="flex items-center space-x-3">
+                                                <div className="relative flex-1 w-full">
+                                                    <Link className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted" />
+                                                    <Input
+                                                        value={url}
+                                                        onChange={e => setUrl(e.target.value)}
+                                                        placeholder="Paste OpenAPI / Swagger JSON URL..."
+                                                        className="pl-11 h-14 rounded-xl glassmorphism text-base w-full font-mono text-foreground focus-visible:ring-2 focus-visible:ring-accent"
+                                                        onKeyDown={e => { if (e.key === 'Enter') handleParse(); }}
+                                                    />
+                                                </div>
+                                                <Button onClick={() => handleParse()} disabled={loading} size="lg" className="h-14 px-8 rounded-xl font-bold text-base bg-accent text-background hover:opacity-90 transition-all">
+                                                    {loading ? "Parsing..." : "Parse API"}
+                                                </Button>
+                                            </div>
+                                            <div className="pt-1">
+                                                <p className="text-[10px] uppercase tracking-widest font-bold text-foreground/50 mb-2 font-mono">Quick Start Samples</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {[
+                                                        { name: "Petstore v2", url: "https://petstore.swagger.io/v2/swagger.json" },
+                                                        { name: "Bitbucket", url: "https://api.bitbucket.org/swagger.json" },
+                                                        { name: "1Password", url: "https://api.apis.guru/v2/specs/1password.com/events/1.0.0/openapi.json" },
+                                                        { name: "1Forge", url: "https://api.apis.guru/v2/specs/1forge.com/0.0.1/swagger.json" },
+                                                        { name: "Authentiq", url: "https://api.apis.guru/v2/specs/6-dot-authentiqio.appspot.com/6/openapi.json" }
+                                                    ].map((sample) => (
+                                                        <button
+                                                            key={sample.name}
+                                                            onClick={() => { setUrl(sample.url); handleParse(sample.url); }}
+                                                            className="px-3 py-1.5 rounded-full text-[11px] font-mono font-semibold border border-border text-foreground/70 bg-surface hover:border-accent hover:text-accent transition-all duration-200"
+                                                        >
+                                                            {sample.name}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            {error && (
+                                                <div className="w-full mt-2 p-4 bg-destructive/10 border border-destructive/20 text-destructive text-sm rounded-xl flex items-center">
+                                                    <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0" />
+                                                    {error}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* 3a. Signature Interactive Element: Diner/Waiter/Server Metaphor */}
+                                    <div className="lg:col-span-5 flex justify-center">
+                                        <ApiMetaphorAnimation />
+                                    </div>
+                                </div>
+
+                                {/* 3b. "What each mode actually does" section */}
+                                <div className="space-y-8 pt-10 border-t border-border">
+                                    <div className="text-center space-y-3">
+                                        <h2 className="text-2xl md:text-3xl font-bold font-display text-foreground">What Each Mode Actually Does</h2>
+                                        <p className="text-foreground/70 text-base max-w-2xl mx-auto font-sans">
+                                            Deterministic code inspection paired with grounded LLM analysis for full spec lifecycle intelligence.
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {/* Explorer Card */}
+                                        <div className="p-6 rounded-2xl bg-surface border border-border flex flex-col justify-between hover:border-accent/40 transition-all shadow-theme group">
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-mono font-bold uppercase tracking-wider text-accent px-2.5 py-1 rounded bg-accent/10 border border-accent/20">
+                                                        Explorer Mode
+                                                    </span>
+                                                    <Search className="w-5 h-5 text-accent" />
+                                                </div>
+                                                <p className="text-foreground text-sm font-sans leading-relaxed">
+                                                    Paste a spec URL. We parse every endpoint, method, and parameter server-side and put it in an interactive explorer — click any endpoint and run it for real, right in the browser.
+                                                </p>
+                                            </div>
+                                            <div className="mt-6 pt-4 border-t border-border/60 flex items-center justify-between">
+                                                <span className="text-xs font-mono text-muted">Proof Point</span>
+                                                <span className="text-xs font-mono text-accent font-semibold">Live Sandbox Execution</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Intent Card */}
+                                        <div className="p-6 rounded-2xl bg-surface border border-border flex flex-col justify-between hover:border-accent/40 transition-all shadow-theme group">
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-mono font-bold uppercase tracking-wider text-accent px-2.5 py-1 rounded bg-accent/10 border border-accent/20">
+                                                        Intent Mode
+                                                    </span>
+                                                    <Code className="w-5 h-5 text-accent" />
+                                                </div>
+                                                <p className="text-foreground text-sm font-sans leading-relaxed">
+                                                    Describe what you're trying to build in plain English. Get back a step-by-step plan and working code in Python, JavaScript, and cURL — grounded in the actual spec, not a guess.
+                                                </p>
+                                            </div>
+                                            <div className="mt-6 pt-4 border-t border-border/60 flex items-center justify-between">
+                                                <span className="text-xs font-mono text-muted">Proof Point</span>
+                                                <span className="text-xs font-mono text-accent font-semibold">Python / JS / cURL Generator</span>
+                                            </div>
+                                        </div>
+
+                                        {/* API Diff Card */}
+                                        <div className="p-6 rounded-2xl bg-surface border border-border flex flex-col justify-between hover:border-accent/40 transition-all shadow-theme group">
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-mono font-bold uppercase tracking-wider text-accent px-2.5 py-1 rounded bg-accent/10 border border-accent/20">
+                                                        API Diff
+                                                    </span>
+                                                    <Play className="w-5 h-5 text-accent" />
+                                                </div>
+                                                <p className="text-foreground text-sm font-sans leading-relaxed">
+                                                    Load two versions of a spec. See exactly what was added, removed, or changed — computed endpoint-by-endpoint, not summarized loosely — plus a migration guide for anything breaking.
+                                                </p>
+                                            </div>
+                                            <div className="mt-6 pt-4 border-t border-border/60 flex items-center justify-between">
+                                                <span className="text-xs font-mono text-muted">Proof Point</span>
+                                                <span className="text-xs font-mono text-accent font-semibold">Petstore v2 → v3: 1 endpoint removed, 19 modified</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Security Audit Card */}
+                                        <div className="p-6 rounded-2xl bg-surface border border-border flex flex-col justify-between hover:border-accent/40 transition-all shadow-theme group">
+                                            <div className="space-y-3">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs font-mono font-bold uppercase tracking-wider text-accent-critical px-2.5 py-1 rounded bg-accent-critical/10 border border-accent-critical/20">
+                                                        Security Audit
+                                                    </span>
+                                                    <Shield className="w-5 h-5 text-accent-critical" />
+                                                </div>
+                                                <p className="text-foreground text-sm font-sans leading-relaxed">
+                                                    Scan any spec for unauthenticated endpoints, exposed sensitive fields, missing HTTPS, and unprotected admin routes, then get a risk score and a plain-English breakdown of what to fix first.
+                                                </p>
+                                            </div>
+                                            <div className="mt-6 pt-4 border-t border-border/60 flex items-center justify-between">
+                                                <span className="text-xs font-mono text-muted">Proof Point</span>
+                                                <span className="text-xs font-mono text-accent-critical font-semibold">Petstore scores 90/100 Critical — 11 endpoints with no authentication</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 3c. "How it works" strip */}
+                                <div className="space-y-8 pt-10 border-t border-border">
+                                    <div className="text-center space-y-3">
+                                        <h2 className="text-2xl md:text-3xl font-bold font-display text-foreground">How It Works</h2>
+                                        <p className="text-foreground/70 text-base max-w-2xl mx-auto font-sans">
+                                            Facts computed deterministically in code first — language generated by the model on top of verified facts.
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                        <div className="p-5 rounded-xl bg-surface border border-border space-y-3 shadow-theme">
+                                            <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 text-accent flex items-center justify-center font-mono font-bold text-sm">
+                                                01
+                                            </div>
+                                            <h3 className="font-display font-bold text-base text-foreground">Spec Input</h3>
+                                            <p className="text-xs text-foreground/65 font-sans leading-relaxed">
+                                                Fetch raw OpenAPI 3.0 / Swagger JSON specifications directly from any URL.
+                                            </p>
+                                        </div>
+
+                                        <div className="p-5 rounded-xl bg-surface border border-border space-y-3 shadow-theme">
+                                            <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 text-accent flex items-center justify-center font-mono font-bold text-sm">
+                                                02
+                                            </div>
+                                            <h3 className="font-display font-bold text-base text-foreground">Structured Parsing</h3>
+                                            <p className="text-xs text-foreground/65 font-sans leading-relaxed">
+                                                Extract every endpoint, query param, request body, and auth requirement in server-side code.
+                                            </p>
+                                        </div>
+
+                                        <div className="p-5 rounded-xl bg-surface border border-border space-y-3 shadow-theme">
+                                            <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 text-accent flex items-center justify-center font-mono font-bold text-sm">
+                                                03
+                                            </div>
+                                            <h3 className="font-display font-bold text-base text-foreground">Deterministic Checks</h3>
+                                            <p className="text-xs text-foreground/65 font-sans leading-relaxed">
+                                                Compute diff matrix, audit missing auth, and validate endpoints algorithmically.
+                                            </p>
+                                        </div>
+
+                                        <div className="p-5 rounded-xl bg-surface border border-border space-y-3 shadow-theme">
+                                            <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 text-accent flex items-center justify-center font-mono font-bold text-sm">
+                                                04
+                                            </div>
+                                            <h3 className="font-display font-bold text-base text-foreground">LLM Synthesis</h3>
+                                            <p className="text-xs text-foreground/65 font-sans leading-relaxed">
+                                                LLaMA 3.3 70B synthesizes grounded migration guides, code snippets, and remediation steps.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 3d. Tech stack strip */}
+                                <div className="py-6 px-8 rounded-2xl bg-surface border border-border shadow-theme flex flex-col sm:flex-row items-center justify-between gap-4">
+                                    <span className="text-xs font-mono uppercase tracking-widest text-foreground/60 font-bold">Built With Engineering Rigor</span>
+                                    <div className="flex flex-wrap items-center justify-center gap-3 font-mono text-xs text-foreground font-semibold">
+                                        <span className="px-3.5 py-1.5 rounded-full bg-surface-raised border border-border">Next.js App Router</span>
+                                        <span className="px-3.5 py-1.5 rounded-full bg-surface-raised border border-border">Groq Cloud LPU</span>
+                                        <span className="px-3.5 py-1.5 rounded-full bg-surface-raised border border-border">LLaMA 3.3 70B</span>
+                                    </div>
+                                </div>
+
+                                {/* 3e. Footer / closing CTA */}
+                                <div className="pt-12 pb-6 border-t border-border text-center space-y-6">
+                                    <h2 className="text-3xl font-extrabold font-display text-foreground">Ready to Explore & Audit Your API?</h2>
+                                    <p className="text-foreground/65 text-sm max-w-md mx-auto font-sans">
+                                        Start with any OpenAPI JSON specification URL — no account or API keys required to parse.
                                     </p>
 
-                                    {/* Central Parsing Input */}
-                                    <div className="max-w-xl mx-auto w-full flex flex-col space-y-4 pt-6">
-                                        <div className="flex items-center space-x-3">
-                                            <div className="relative flex-1 w-full">
-                                                <Link className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-                                                <Input
-                                                    value={url}
-                                                    onChange={e => setUrl(e.target.value)}
-                                                    placeholder="Paste OpenAPI / Swagger JSON URL..."
-                                                    className="pl-11 h-14 rounded-xl glassmorphism text-base w-full"
-                                                    onKeyDown={e => { if (e.key === 'Enter') handleParse(); }}
-                                                />
-                                            </div>
-                                            <Button onClick={() => handleParse()} disabled={loading} size="lg" className="h-14 px-8 rounded-xl font-medium text-base">
-                                                {loading ? "Parsing..." : "Parse API"}
-                                            </Button>
+                                    <div className="max-w-xl mx-auto flex items-center space-x-3">
+                                        <div className="relative flex-1 w-full">
+                                            <Link className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted" />
+                                            <Input
+                                                value={url}
+                                                onChange={e => setUrl(e.target.value)}
+                                                placeholder="Paste OpenAPI / Swagger JSON URL..."
+                                                className="pl-11 h-14 rounded-xl glassmorphism text-base w-full font-mono text-foreground focus-visible:ring-2 focus-visible:ring-accent"
+                                                onKeyDown={e => { if (e.key === 'Enter') handleParse(); }}
+                                            />
                                         </div>
-                                        <div className="pt-2">
-                                            <p className="text-[10px] uppercase tracking-widest font-bold text-muted-foreground/60 mb-3">Quick Start Samples</p>
-                                            <div className="flex flex-wrap justify-center gap-2">
-                                                {[
-                                                    { name: "Petstore v2", url: "https://petstore.swagger.io/v2/swagger.json", color: "blue" },
-                                                    { name: "Bitbucket", url: "https://api.bitbucket.org/swagger.json", color: "blue" },
-                                                    { name: "1Password", url: "https://api.apis.guru/v2/specs/1password.com/events/1.0.0/openapi.json", color: "emerald" },
-                                                    { name: "1Forge", url: "https://api.apis.guru/v2/specs/1forge.com/0.0.1/swagger.json", color: "amber" },
-                                                    { name: "Authentiq", url: "https://api.apis.guru/v2/specs/6-dot-authentiqio.appspot.com/6/openapi.json", color: "purple" }
-                                                ].map((sample) => (
-                                                    <button
-                                                        key={sample.name}
-                                                        onClick={() => { setUrl(sample.url); handleParse(sample.url); }}
-                                                        className="px-3 py-1.5 rounded-full text-[11px] font-bold border border-border bg-card/50 hover:bg-primary hover:text-white hover:border-primary transition-all duration-300"
-                                                    >
-                                                        {sample.name}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        {error && (
-                                            <div className="w-full mt-4 p-4 bg-destructive/10 border border-destructive/20 text-destructive text-sm rounded-xl flex items-center justify-center">
-                                                <AlertCircle className="w-5 h-5 mr-2 flex-shrink-0" />
-                                                {error}
-                                            </div>
-                                        )}
+                                        <Button onClick={() => handleParse()} disabled={loading} size="lg" className="h-14 px-8 rounded-xl font-bold text-base bg-accent text-background hover:opacity-90 transition-all">
+                                            {loading ? "Parsing..." : "Parse API"}
+                                        </Button>
+                                    </div>
+
+                                    <div className="pt-8 text-xs font-mono text-foreground/50">
+                                        Orion API Intelligence Layer • Designed for Google Antigravity
                                     </div>
                                 </div>
 
-                                {/* Capabilities Section */}
-                                <div className="space-y-10 pt-8 border-t border-white/5 relative">
-                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-px bg-gradient-to-r from-transparent via-primary/50 to-transparent"></div>
-
-                                    <div className="text-center space-y-3">
-                                        <div className="inline-flex items-center space-x-2 bg-primary/10 text-primary border border-primary/20 px-3 py-1 rounded-full text-xs font-medium mb-2">
-                                            <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-                                            <span>Platform Architecture</span>
-                                        </div>
-                                        <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">From Static Docs to Autonomous API Enablement</h2>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 auto-rows-[220px] md:auto-rows-[250px]">
-
-                                        {/* Doc Parsing - Large Horizontal */}
-                                        <div className="md:col-span-2 group relative overflow-hidden rounded-[2rem] bg-card border border-border p-8 flex flex-col justify-between transition-all hover:border-blue-500/30 shadow-sm">
-                                            <div className="absolute top-0 right-0 p-6 opacity-[0.03] group-hover:opacity-10 font-mono text-sm leading-tight text-blue-300 pointer-events-none transition-opacity">
-                                                {`{
-  "openapi": "3.0.0",
-  "info": {
-    "title": "API",
-    "version": "1.0.0"
-  }
-}`}
-                                            </div>
-                                            <div className="absolute -inset-24 bg-blue-500/5 blur-3xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-
-                                            <div className="w-12 h-12 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center mb-4 relative z-10">
-                                                <Search className="w-5 h-5" />
-                                            </div>
-                                            <div className="relative z-10 mt-auto">
-                                                <h3 className="text-2xl font-bold mb-2 tracking-tight">Intelligent Doc Parsing</h3>
-                                                <p className="text-muted-foreground text-sm max-w-md">Understands OpenAPI & Swagger specs natively to auto-detect endpoints & authentication. Spec-driven grounding actively eliminates LLM hallucinations.</p>
-                                            </div>
-                                        </div>
-
-                                        {/* Sandbox - Vertical */}
-                                        <div className="md:col-span-1 md:row-span-2 group relative overflow-hidden rounded-[2rem] bg-card border border-border p-8 flex flex-col transition-all hover:border-purple-500/30 shadow-sm">
-                                            <div className="absolute inset-0 bg-[linear-gradient(to_right,#8033ff11_1px,transparent_1px),linear-gradient(to_bottom,#8033ff11_1px,transparent_1px)] bg-[size:24px_24px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_0%,#000_70%,transparent_100%)] opacity-30"></div>
-                                            <div className="absolute -inset-24 bg-purple-500/5 blur-3xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-
-                                            <div className="w-12 h-12 rounded-full bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-6 relative z-10">
-                                                <Play className="w-5 h-5 ml-0.5" />
-                                            </div>
-                                            <div className="relative z-10 flex-1 flex flex-col">
-                                                <h3 className="text-2xl font-bold mb-3 tracking-tight">Interactive Sandbox</h3>
-                                                <p className="text-muted-foreground text-sm mb-6">Ask in natural language, automatically construct API calls, and execute instantly.</p>
-
-                                                <div className="mt-auto">
-                                                    <div className="bg-card rounded-xl border border-border p-4 font-mono text-[11px] space-y-3 backdrop-blur-md">
-                                                        <div className="flex space-x-1.5 mb-2">
-                                                            <div className="w-2.5 h-2.5 rounded-full bg-red-500/80"></div>
-                                                            <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80"></div>
-                                                            <div className="w-2.5 h-2.5 rounded-full bg-green-500/80"></div>
-                                                        </div>
-                                                        <div className="text-purple-300">➜ <span className="text-foreground">execute</span> <span className="text-emerald-400 font-bold">POST</span> /users</div>
-                                                        <div className="text-green-500 flex items-center"><Check className="w-3 h-3 mr-1" /> 201 Created</div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Code Gen - Small square */}
-                                        <div className="md:col-span-1 group relative overflow-hidden rounded-[2rem] bg-card border border-border p-8 flex flex-col justify-between transition-all hover:border-emerald-500/30 shadow-sm">
-                                            <div className="absolute -inset-24 bg-emerald-500/5 blur-3xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-                                            <div className="flex items-center justify-between relative z-10 mb-4">
-                                                <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                                                    <Code className="w-5 h-5" />
-                                                </div>
-                                                <div className="font-mono text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded">SDK</div>
-                                            </div>
-                                            <div className="relative z-10 mt-auto">
-                                                <h3 className="text-xl font-bold mb-2 tracking-tight">Instant SDK / Scripts</h3>
-                                                <p className="text-muted-foreground text-sm">Generate executable Python/JS snippets with built-in retry logic instantly.</p>
-                                            </div>
-                                        </div>
-
-                                        {/* Self Healing - Small square */}
-                                        <div className="md:col-span-1 group relative overflow-hidden rounded-[2rem] bg-card border border-border p-8 flex flex-col justify-between transition-all hover:border-amber-500/30 shadow-sm">
-                                            <div className="absolute right-0 top-0 w-32 h-32 bg-amber-500/5 rounded-bl-[100px] -z-0 group-hover:scale-110 transition-transform duration-700"></div>
-                                            <div className="w-12 h-12 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-4 relative z-10">
-                                                <Shield className="w-5 h-5" />
-                                            </div>
-                                            <div className="relative z-10 mt-auto">
-                                                <h3 className="text-xl font-bold mb-2 tracking-tight">Self-Healing APIs</h3>
-                                                <p className="text-muted-foreground text-sm">Detects API runtime errors & automatically suggests JSON payload fixes.</p>
-                                            </div>
-                                        </div>
-
-                                    </div>
-                                </div>
                             </div>
                         </div>
                     ) : selectedEndpoint ? (
@@ -1184,33 +1433,125 @@ export default function Home() {
 
                                     {/* API Playground */}
                                     <Card className="glassmorphism border-white/10">
-                                        <CardHeader>
-                                            <CardTitle className="text-lg">API Playground</CardTitle>
-                                            <CardDescription>Test this endpoint directly</CardDescription>
+                                        <CardHeader className="flex flex-row items-center justify-between pb-2">
+                                            <div>
+                                                <CardTitle className="text-lg">API Playground</CardTitle>
+                                                <CardDescription>Test this endpoint directly with session chain variables</CardDescription>
+                                            </div>
+                                            {testResponse?.data && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={handleSuggestChain}
+                                                    disabled={suggestLoading}
+                                                    className="border-blue-500/50 text-blue-300 hover:bg-blue-500/20 glassmorphism text-xs font-bold flex items-center space-x-1.5"
+                                                >
+                                                    <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+                                                    <span>{suggestLoading ? "Analyzing..." : "Suggest Chain"}</span>
+                                                </Button>
+                                            )}
                                         </CardHeader>
                                         <CardContent className="space-y-4">
+                                            {/* AI Chain Suggestions */}
+                                            {chainSuggestions.length > 0 && (
+                                                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-xl space-y-2 animate-in fade-in">
+                                                    <div className="flex items-center space-x-2 text-xs font-bold text-blue-400 uppercase tracking-wider">
+                                                        <Sparkles className="w-4 h-4 text-blue-400" />
+                                                        <span>Suggested Parameter Chainings</span>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-2 pt-1">
+                                                        {chainSuggestions.map((s, idx) => (
+                                                            <button
+                                                                key={idx}
+                                                                type="button"
+                                                                onClick={() => applySuggestion(s)}
+                                                                className="px-3 py-1.5 rounded-lg text-xs font-mono bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 transition-all flex items-center space-x-1.5 shadow-sm"
+                                                                title={s.rationale || `Map ${s.from} to ${s.to}`}
+                                                            >
+                                                                <span className="font-bold">Apply:</span>
+                                                                <span className="text-cyan-300 font-bold">{`{{${s.from}}}`}</span>
+                                                                <span>→</span>
+                                                                <span className="text-white font-bold">{s.to}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Parameters Section */}
                                             {selectedEndpoint.parameters.length > 0 && (
                                                 <div className="space-y-3">
                                                     <h4 className="text-sm font-semibold">Parameters</h4>
                                                     {selectedEndpoint.parameters.map((p, i) => (
                                                         <div key={i} className="flex gap-4 items-center">
-                                                            <span className="w-1/4 text-sm font-mono text-muted-foreground">
+                                                            <span className="w-1/4 text-sm font-mono text-muted-foreground truncate" title={p.name}>
                                                                 {p.name} {p.required && <span className="text-destructive">*</span>}
                                                             </span>
                                                             <Badge variant="secondary" className="text-[10px]">{p.in}</Badge>
-                                                            <Input
-                                                                className="flex-1 h-8 text-sm"
-                                                                placeholder={p.description || "value..."}
+                                                            <VariableInput
+                                                                className="flex-1 h-8 text-sm font-mono"
+                                                                placeholder={p.description || "value... (use {{var}})"}
                                                                 value={testParams[p.name] || ''}
-                                                                onChange={e => setTestParams({ ...testParams, [p.name]: e.target.value })}
+                                                                onValueChange={val => setTestParams({ ...testParams, [p.name]: val })}
+                                                                variables={variableStore}
                                                             />
                                                         </div>
                                                     ))}
                                                 </div>
                                             )}
 
+                                            {/* Headers Section */}
+                                            <div className="space-y-3 pt-2 border-t border-border/40">
+                                                <div className="flex items-center justify-between">
+                                                    <h4 className="text-sm font-semibold">Headers</h4>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => setCustomHeaders([...customHeaders, { key: "", value: "" }])}
+                                                        className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                                                    >
+                                                        <Plus className="w-3 h-3 mr-1" /> Add Header
+                                                    </Button>
+                                                </div>
+                                                {customHeaders.map((h, i) => (
+                                                    <div key={i} className="flex gap-3 items-center">
+                                                        <VariableInput
+                                                            className="w-1/3 h-8 text-sm font-mono"
+                                                            placeholder="Header (e.g. Authorization)"
+                                                            value={h.key}
+                                                            onValueChange={(val) => {
+                                                                const updated = [...customHeaders];
+                                                                updated[i].key = val;
+                                                                setCustomHeaders(updated);
+                                                            }}
+                                                            variables={variableStore}
+                                                        />
+                                                        <VariableInput
+                                                            className="flex-1 h-8 text-sm font-mono"
+                                                            placeholder="Value (e.g. Bearer {{token}})"
+                                                            value={h.value}
+                                                            onValueChange={(val) => {
+                                                                const updated = [...customHeaders];
+                                                                updated[i].value = val;
+                                                                setCustomHeaders(updated);
+                                                            }}
+                                                            variables={variableStore}
+                                                        />
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            onClick={() => setCustomHeaders(customHeaders.filter((_, idx) => idx !== i))}
+                                                            className="h-8 w-8 text-muted-foreground hover:text-red-400"
+                                                        >
+                                                            <Trash2 className="w-3.5 h-3.5" />
+                                                        </Button>
+                                                    </div>
+                                                ))}
+                                            </div>
+
+                                            {/* Request Body */}
                                             {selectedEndpoint.requestBody && (
-                                                <div className="space-y-3 pt-4">
+                                                <div className="space-y-3 pt-2 border-t border-border/40">
                                                     <h4 className="text-sm font-semibold">Request Body (JSON)</h4>
                                                     <div className="h-40 border rounded-md overflow-hidden border-border/50">
                                                         <Editor
@@ -1219,6 +1560,7 @@ export default function Home() {
                                                             theme={theme === "dark" ? "vs-dark" : "light"}
                                                             value={testParams.body || '{\n  \n}'}
                                                             onChange={(val) => setTestParams({ ...testParams, body: val || '' })}
+                                                            onMount={handleEditorMount}
                                                             options={{ minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }}
                                                         />
                                                     </div>
@@ -1242,6 +1584,46 @@ export default function Home() {
                                                             {JSON.stringify(testResponse.data, null, 2)}
                                                         </pre>
                                                     </div>
+
+                                                    {/* Auto-Extracted Variables Panel */}
+                                                    {testResponse.status >= 200 && testResponse.status < 300 && extractedVars.length > 0 && (
+                                                        <div className="mt-4 p-4 rounded-xl bg-cyan-500/10 border border-cyan-500/30 space-y-3 animate-in fade-in">
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex items-center space-x-2">
+                                                                    <Link2 className="w-4 h-4 text-cyan-400" />
+                                                                    <span className="text-xs font-bold text-cyan-400 uppercase tracking-wider">Extracted Variables</span>
+                                                                </div>
+                                                                <span className="text-[10px] text-cyan-300/80">Auto-detected from response</span>
+                                                            </div>
+
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {extractedVars.map((item, idx) => {
+                                                                    const isSaved = variableStore[item.key] === item.value;
+                                                                    return (
+                                                                        <div
+                                                                            key={idx}
+                                                                            className="bg-cyan-500/20 border border-cyan-500/40 text-cyan-300 rounded-full px-3.5 py-1 text-xs font-mono flex items-center space-x-2 shadow-sm"
+                                                                        >
+                                                                            <span>
+                                                                                <strong className="text-cyan-200">{`{{${item.key}}}`}</strong>: {item.value}
+                                                                            </span>
+                                                                            <button
+                                                                                onClick={() => setVariableStore(prev => ({ ...prev, [item.key]: item.value }))}
+                                                                                disabled={isSaved}
+                                                                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                                                                                    isSaved
+                                                                                        ? "bg-cyan-500/40 text-cyan-100 cursor-default"
+                                                                                        : "bg-cyan-500 hover:bg-cyan-400 text-black cursor-pointer"
+                                                                                }`}
+                                                                            >
+                                                                                {isSaved ? "Saved" : "Save"}
+                                                                            </button>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                     {testResponse.status >= 400 && (
                                                         <div className="mt-4 border-t border-border/50 pt-4">
                                                             {!diagnosisResult ? (

@@ -4,74 +4,115 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 224 71.4% 4.1%;
-    --card: 0 0% 100%;
-    --card-foreground: 224 71.4% 4.1%;
+    /* Light mode design tokens — Warm Linen / Bone */
+    --bg: #F6F1E7;
+    --surface: #FFFDF8;
+    --surface-raised: #FFFFFF;
+    --border: #E4DCC8;
+    --text-primary: #1E2530;
+    --text-muted: #475569;
+    --accent: #0E7C8C;
+    --accent-warn: #B8792B;
+    --accent-critical: #C6435A;
+    --shadow-color: rgba(30, 37, 48, 0.08);
+
+    /* Shadcn compatibility tokens */
+    --background: 38 35% 93.5%;
+    --foreground: 216 23% 15.7%;
+    --card: 43 100% 98.6%;
+    --card-foreground: 216 23% 15.7%;
     --popover: 0 0% 100%;
-    --popover-foreground: 224 71.4% 4.1%;
-    --primary: 220 9% 46%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 224 71.4% 4.1%;
-    --radius: 0.5rem;
+    --popover-foreground: 216 23% 15.7%;
+    --primary: 187 82% 30.4%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 40 25% 90%;
+    --secondary-foreground: 216 23% 15.7%;
+    --muted: 40 25% 90%;
+    --muted-foreground: 215 16% 35%;
+    --accent-color: 187 82% 30.4%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 351 53% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border-color: 42 33% 84%;
+    --input: 42 33% 84%;
+    --ring: 187 82% 30.4%;
+    --radius: 0.75rem;
   }
 
   .dark {
-    --background: 240 10% 4%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 4%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 4%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    /* Dark mode design tokens — Deep Navy */
+    --bg: #0B1120;
+    --surface: #131C2E;
+    --surface-raised: #1B2740;
+    --border: #243352;
+    --text-primary: #E7EDF5;
+    --text-muted: #94A3B8;
+    --accent: #22D3EE;
+    --accent-warn: #F5A623;
+    --accent-critical: #F0556B;
+    --shadow-color: rgba(0, 0, 0, 0.45);
+
+    /* Shadcn compatibility tokens */
+    --background: 221 48% 8.4%;
+    --foreground: 214 47% 93.3%;
+    --card: 219 41% 12.7%;
+    --card-foreground: 214 47% 93.3%;
+    --popover: 219 40% 17.8%;
+    --popover-foreground: 214 47% 93.3%;
+    --primary: 187 80% 47.6%;
+    --primary-foreground: 221 48% 8.4%;
+    --secondary: 219 40% 17.8%;
+    --secondary-foreground: 214 47% 93.3%;
+    --muted: 219 40% 17.8%;
+    --muted-foreground: 215 20% 70%;
+    --accent-color: 187 80% 47.6%;
+    --accent-foreground: 221 48% 8.4%;
+    --destructive: 351 84% 67%;
+    --destructive-foreground: 214 47% 93.3%;
+    --border-color: 220 39% 23.3%;
+    --input: 220 39% 23.3%;
+    --ring: 187 80% 47.6%;
   }
 }
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--border);
   }
 
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-sans), 'IBM Plex Sans', sans-serif;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display), 'Space Grotesk', sans-serif;
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono), 'IBM Plex Mono', monospace;
   }
 }
 
 .glassmorphism {
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px -2px var(--shadow-color);
 }
 
-.dark .glassmorphism {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.05);
+.glassmorphism-raised {
+  background-color: var(--surface-raised);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 30px -4px var(--shadow-color);
 }
 
-:root:not(.dark) .glassmorphism {
-  background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.05);
+.shadow-theme {
+  box-shadow: 0 10px 30px -5px var(--shadow-color);
 }
+
+/* Accessible focus visible outlines */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

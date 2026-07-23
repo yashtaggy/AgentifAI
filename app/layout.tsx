@@ -1,10 +1,28 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import { Space_Grotesk, IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
 import './globals.css'
 import { cn } from '@/lib/utils'
 import { AuthProvider } from '@/context/AuthContext'
 
-const inter = Inter({ subsets: ['latin'] })
+const spaceGrotesk = Space_Grotesk({
+    subsets: ['latin'],
+    variable: '--font-display',
+    display: 'swap',
+})
+
+const ibmPlexSans = IBM_Plex_Sans({
+    subsets: ['latin'],
+    weight: ['400', '500', '600', '700'],
+    variable: '--font-sans',
+    display: 'swap',
+})
+
+const ibmPlexMono = IBM_Plex_Mono({
+    subsets: ['latin'],
+    variable: '--font-mono',
+    weight: ['400', '500', '600', '700'],
+    display: 'swap',
+})
 
 export const metadata: Metadata = {
     title: 'Orion - API Intelligence Layer',
@@ -22,11 +40,11 @@ export default function RootLayout({
     children: React.ReactNode
 }) {
     return (
-        <html lang="en">
+        <html lang="en" className={`${spaceGrotesk.variable} ${ibmPlexSans.variable} ${ibmPlexMono.variable}`}>
             <head>
                 <link rel="icon" href="/Orion.png" />
             </head>
-            <body className={cn(inter.className, "min-h-screen bg-background text-foreground antialiased selection:bg-primary selection:text-primary-foreground")}>
+            <body className={cn(ibmPlexSans.className, "font-sans min-h-screen bg-background text-foreground antialiased selection:bg-accent selection:text-white")}>
                 <AuthProvider>
                     {children}
                 </AuthProvider>
@@ -34,3 +52,4 @@ export default function RootLayout({
         </html>
     )
 }
+
